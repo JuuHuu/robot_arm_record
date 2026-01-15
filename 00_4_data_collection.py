@@ -1,7 +1,10 @@
+import csv
 import itertools
 import subprocess
 import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 
@@ -10,7 +13,7 @@ from pathlib import Path
 VAR1_START = 0
 VAR1_STOP = 17
 VAR1_STEP = 1
-VAR1_SINGLE = None  # set to an int to use a single value only
+VAR1_SINGLE = 00  # set to an int to use a single value only
 
 # Second variable: default 00..360 step 30
 VAR2_START = 0
@@ -26,6 +29,13 @@ COUNTDOWN_TICK = 0.1  # seconds
 USE_GUI = True
 GUI_TICK = 0.1  # seconds, GUI refresh interval
 
+# ROS topics to record
+TOPIC_JOINT_STATES = "/joint_states"
+TOPIC_WRENCH = "/force_torque_sensor_broadcaster/wrench"
+
+# Output base folder
+OUTPUT_BASE_DIR = "/home/juu/Documents/robot_arm_record/exported"
+
 # Optional: run a data preparation script before each collect phase
 PREP_SCRIPT_PATH = "/home/juu/Documents/robot_arm_record/00_3_execute.py"  # e.g. "/home/juu/Documents/robot_arm_record/00_3_execute.py"
 
@@ -33,7 +43,7 @@ PREP_SCRIPT_PATH = "/home/juu/Documents/robot_arm_record/00_3_execute.py"  # e.g
 MAX_CYCLES = None
 
 # Repeat each (v1, v2) pair this many times
-REPEAT_PER_PAIR = 1
+REPEAT_PER_PAIR = 5
 # ==========================
 
 
@@ -121,6 +131,130 @@ def run_prep_script():
     subprocess.run([sys.executable, str(path)], check=True)
 
 
+def _stamp_to_float(stamp):
+    if stamp.sec == 0 and stamp.nanosec == 0:
+        return time.time()
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+
+class CsvCollector:
+    def __init__(self):
+        import rclpy
+        from geometry_msgs.msg import WrenchStamped
+        from rclpy.node import Node
+        from sensor_msgs.msg import JointState
+
+        class _Node(Node):
+            def __init__(self, outer):
+                super().__init__("csv_collector")
+                self.outer = outer
+                self.create_subscription(JointState, TOPIC_JOINT_STATES, self._on_joint, 10)
+                self.create_subscription(WrenchStamped, TOPIC_WRENCH, self._on_wrench, 10)
+
+            def _on_joint(self, msg):
+                self.outer._handle_joint(msg)
+
+            def _on_wrench(self, msg):
+                self.outer._handle_wrench(msg)
+
+        self._lock = threading.Lock()
+        self._recording = False
+        self._joint_rows = []
+        self._wrench_rows = []
+        self._rclpy = rclpy
+        self._node = _Node(self)
+
+    @property
+    def node(self):
+        return self._node
+
+    def start_recording(self):
+        with self._lock:
+            self._recording = True
+
+    def stop_recording(self):
+        with self._lock:
+            self._recording = False
+    def clear_buffers(self):
+        with self._lock:
+            self._joint_rows = []
+            self._wrench_rows = []
+
+
+    def _handle_joint(self, msg):
+        stamp = _stamp_to_float(msg.header.stamp)
+        with self._lock:
+            if not self._recording:
+                return
+            for idx, name in enumerate(msg.name):
+                position = msg.position[idx] if idx < len(msg.position) else None
+                velocity = msg.velocity[idx] if idx < len(msg.velocity) else None
+                effort = msg.effort[idx] if idx < len(msg.effort) else None
+                self._joint_rows.append(
+                    {
+                        "time": stamp,
+                        "joint_name": name,
+                        "position": position,
+                        "velocity": velocity,
+                        "effort": effort,
+                    }
+                )
+
+    def _handle_wrench(self, msg):
+        stamp = _stamp_to_float(msg.header.stamp)
+        with self._lock:
+            if not self._recording:
+                return
+            self._wrench_rows.append(
+                {
+                    "time": stamp,
+                    "fx": msg.wrench.force.x,
+                    "fy": msg.wrench.force.y,
+                    "fz": msg.wrench.force.z,
+                    "tx": msg.wrench.torque.x,
+                    "ty": msg.wrench.torque.y,
+                    "tz": msg.wrench.torque.z,
+                }
+            )
+
+    def write_csv(self, folder_path: Path):
+        folder_path.mkdir(parents=True, exist_ok=True)
+        joint_path = folder_path / "joint_states.csv"
+        wrench_path = folder_path / "wrench.csv"
+        with self._lock:
+            joint_rows = list(self._joint_rows)
+            wrench_rows = list(self._wrench_rows)
+        with joint_path.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["time", "joint_name", "position", "velocity", "effort"]
+            )
+            writer.writeheader()
+            writer.writerows(joint_rows)
+        with wrench_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["time", "fx", "fy", "fz", "tx", "ty", "tz"])
+            writer.writeheader()
+            writer.writerows(wrench_rows)
+        return joint_path, wrench_path, len(joint_rows), len(wrench_rows)
+
+
+def build_autosave_dir(v1, v2):
+    base_dir = Path(OUTPUT_BASE_DIR)
+    if VAR1_SINGLE is not None and VAR2_SINGLE is not None:
+        base_name = f"autosave_{int(VAR1_SINGLE):02d}_{int(VAR2_SINGLE):03d}"
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base_name = f"autosave_{stamp}"
+    path = base_dir / base_name
+    if not path.exists():
+        return path
+    suffix = 2
+    while True:
+        candidate = base_dir / f"{base_name}_{suffix}"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
+
+
 def countdown(label, seconds, v1=None, v2=None, gui=None, rep=None, rep_total=None):
     start = time.monotonic()
     label_colored = phase_label(label)
@@ -150,6 +284,9 @@ def countdown(label, seconds, v1=None, v2=None, gui=None, rep=None, rep_total=No
 
 
 def main():
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+
     gui = PhaseGUI() if USE_GUI else None
     v1_values = build_values(VAR1_SINGLE, VAR1_START, VAR1_STOP, VAR1_STEP, "VAR1")
     v2_values = build_values(VAR2_SINGLE, VAR2_START, VAR2_STOP, VAR2_STEP, "VAR2")
@@ -166,36 +303,59 @@ def main():
     print(f"Total cycles: {len(pairs)} | Estimated time: {total_seconds:.1f}s")
     print("Press Ctrl+C to stop.")
 
+    rclpy.init(args=None)
+    collector = CsvCollector()
+    executor = SingleThreadedExecutor()
+    executor.add_node(collector.node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
+
     cycle_count = 0
     rep_total = max(1, int(REPEAT_PER_PAIR))
     total_cycles = len(pairs) * rep_total
-    for v1, v2 in pairs:
-        for rep in range(rep_total):
-            cycle_count += 1
-            print(f"\nCycle {cycle_count}/{total_cycles} (rep {rep + 1}/{REPEAT_PER_PAIR})")
-            hit(times=1)
-            countdown(
-                "PREPARE",
-                PREP_SECONDS,
-                v1=v1,
-                v2=v2,
-                gui=gui,
-                rep=rep + 1,
-                rep_total=rep_total,
-            )
+    try:
+        for v1, v2 in pairs:
+            collector.clear_buffers()
+            out_dir = build_autosave_dir(v1, v2)
+            for rep in range(rep_total):
+                cycle_count += 1
+                print(f"\nCycle {cycle_count}/{total_cycles} (rep {rep + 1}/{REPEAT_PER_PAIR})")
+                hit(times=1)
+                collector.start_recording()
+                countdown(
+                    "PREPARE",
+                    PREP_SECONDS,
+                    v1=v1,
+                    v2=v2,
+                    gui=gui,
+                    rep=rep + 1,
+                    rep_total=rep_total,
+                )
 
-            run_prep_script()
-            hit(times=2)
-            countdown(
-                "COLLECT",
-                COLLECT_SECONDS,
-                v1=v1,
-                v2=v2,
-                gui=gui,
-                rep=rep + 1,
-                rep_total=rep_total,
+                run_prep_script()
+                hit(times=2)
+                countdown(
+                    "COLLECT",
+                    COLLECT_SECONDS,
+                    v1=v1,
+                    v2=v2,
+                    gui=gui,
+                    rep=rep + 1,
+                    rep_total=rep_total,
+                )
+                collector.stop_recording()
+                hit(times=1)
+            joint_path, wrench_path, joint_count, wrench_count = collector.write_csv(out_dir)
+            print(
+                f"Saved {joint_count} joint rows to {joint_path} | "
+                f"Saved {wrench_count} wrench rows to {wrench_path}"
             )
-            hit(times=1)
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+    finally:
+        executor.shutdown()
+        collector.node.destroy_node()
+        rclpy.shutdown()
 
     print("\nDone.")
 

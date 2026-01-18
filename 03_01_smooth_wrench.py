@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -5,6 +7,12 @@ from scipy.signal import butter, filtfilt, detrend
 
 
 # ========= CONFIG =========
+# Batch processing (set INPUT_DIR to batch process all matching files)
+INPUT_DIR = "/home/juu/Documents/robot_arm_record/auto_data"
+INPUT_GLOB = "*/wrench.csv"
+OUTPUT_FILENAME = "filtered_wrench.csv"
+
+# Single-file fallback (used only if INPUT_DIR is None)
 CSV_PATH = "/home/juu/Documents/robot_arm_record/exported/apply_force_04_00/wrench.csv"
 OUTPUT_PATH = "/home/juu/Documents/robot_arm_record/exported/apply_force_04_00/filtered_wrench.csv"
 
@@ -13,6 +21,7 @@ USE_DETREND = False
 
 # Plot one channel to check result (set to None to disable)
 PLOT_CHANNEL = "fx"
+PLOT_FIRST_ONLY = True
 
 # Butterworth low-pass parameters
 BUTTER_ORDER = 4
@@ -35,9 +44,9 @@ def butter_lowpass_filter(data, cutoff, fs, order=4):
     return y
 
 
-def main():
-    print(f"Loading CSV from: {CSV_PATH}")
-    df = pd.read_csv(CSV_PATH)
+def process_csv(csv_path, output_path, plot=False):
+    print(f"Loading CSV from: {csv_path}")
+    df = pd.read_csv(csv_path)
 
     required_cols = ["time", "fx", "fy", "fz", "tx", "ty", "tz"]
     missing = [c for c in required_cols if c not in df.columns]
@@ -78,10 +87,10 @@ def main():
                 continue
             df[f"{source_col}_dt"] = detrend(df[source_col].values, type="linear")
 
-    df.to_csv(OUTPUT_PATH, index=False)
-    print(f"Filtered data saved to: {OUTPUT_PATH}")
+    df.to_csv(output_path, index=False)
+    print(f"Filtered data saved to: {output_path}")
 
-    if PLOT_CHANNEL is not None:
+    if plot and PLOT_CHANNEL is not None:
         col_lp = f"{PLOT_CHANNEL}_lp"
         col_dt = f"{col_lp}_dt" if USE_DETREND else None
         if col_lp not in df.columns:
@@ -108,6 +117,22 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plt.show()
+
+
+def main():
+    if INPUT_DIR is not None:
+        root = Path(INPUT_DIR)
+        csv_paths = sorted(root.glob(INPUT_GLOB))
+        if not csv_paths:
+            print(f"[WARN] No CSV files found in {INPUT_DIR} matching '{INPUT_GLOB}'.")
+            return
+
+        for idx, csv_path in enumerate(csv_paths):
+            output_path = csv_path.with_name(OUTPUT_FILENAME)
+            plot = PLOT_CHANNEL is not None and (not PLOT_FIRST_ONLY or idx == 0)
+            process_csv(csv_path, output_path, plot=plot)
+    else:
+        process_csv(Path(CSV_PATH), Path(OUTPUT_PATH), plot=PLOT_CHANNEL is not None)
 
 
 if __name__ == "__main__":

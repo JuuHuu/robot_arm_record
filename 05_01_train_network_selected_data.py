@@ -10,12 +10,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 # input file
-DEFAULT_ROOT = "/home/juu/Documents/robot_arm_record/exported"
-DEFAULT_PATTERN = "apply_force_[0-9][0-9]_[0-9][0-9]"
+DEFAULT_ROOT = "/home/juu/Documents/robot_arm_record/auto_data"
+DEFAULT_PATTERN = "autosave_[0-9][0-9]_[0-9][0-9][0-9]"
 DEFAULT_JOINT_CSV = "fillted_joint_states.csv"
 DEFAULT_WRENCH_CSV = "filtered_wrench.csv"
 DEFAULT_SEGMENT_CSV = "selected_segments.csv"
-DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/exported/wrench_only.pth"
+DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/auto_data/wrench_only.pth"
 
 # input data
 DEFAULT_JOINT_VALUE_COLS = "" #"position,velocity,effort_lp"
@@ -28,10 +28,10 @@ DEFAULT_SEQ_LEN = 50
 # network
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_EPOCHS = 1000
-DEFAULT_LR = 1e-5
+DEFAULT_LR = 1e-4
 DEFAULT_WEIGHT_DECAY = 1e-4
 DEFAULT_HIDDEN_DIM = 128
-DEFAULT_NUM_LAYERS = 1
+DEFAULT_NUM_LAYERS = 3
 DEFAULT_DROPOUT = 0.2
 DEFAULT_VAL_RATIO = 0.2
 DEFAULT_PATIENCE = 100

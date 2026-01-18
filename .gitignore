@@ -6,3 +6,7 @@ Original_data/
 
 
 
+03_00_smooth_data.py
+03_01_smooth_wrench.py
+04_06_choose_data.py
+05_01_train_network_selected_data.py

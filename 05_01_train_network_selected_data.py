@@ -15,12 +15,12 @@ DEFAULT_PATTERN = "autosave_[0-9][0-9]_[0-9][0-9][0-9]"
 DEFAULT_JOINT_CSV = "fillted_joint_states.csv"
 DEFAULT_WRENCH_CSV = "filtered_wrench.csv"
 DEFAULT_SEGMENT_CSV = "selected_segments.csv"
-DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/auto_data/wrench_only.pth"
+DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/auto_data/joints_only.pth"
 
 # input data
-DEFAULT_JOINT_VALUE_COLS = "" #"position,velocity,effort_lp"
-DEFAULT_WRENCH_VALUE_COLS = "fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp" #"fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp"
-DEFAULT_AUGMENT_CROPS = 3
+DEFAULT_JOINT_VALUE_COLS = "position,velocity,effort_lp" #"position,velocity,effort_lp"
+DEFAULT_WRENCH_VALUE_COLS = "" #"fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp"
+DEFAULT_AUGMENT_CROPS = 5
 DEFAULT_NORMALIZE_INPUT = True
 DEFAULT_TRAIN_WINDOW_SECONDS = 1.8
 DEFAULT_SEQ_LEN = 50

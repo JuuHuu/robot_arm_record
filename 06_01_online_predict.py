@@ -14,7 +14,7 @@ from sensor_msgs.msg import JointState
 
 
 # ========= CONFIG =========
-DEFAULT_MODEL_PATH = "/home/juu/Documents/robot_arm_record/exported/test.pth"
+DEFAULT_MODEL_PATH = "/home/juu/Documents/robot_arm_record/weights/01_wrench_joint.pth"
 DEFAULT_TOPIC_JOINT = "/joint_states_filtered"
 DEFAULT_TOPIC_WRENCH = "/wrench_filtered"
 DEFAULT_SYNC_TOL = 0.2  # seconds
@@ -86,6 +86,7 @@ class ContactNet(nn.Module):
         predict_contact: bool,
         predict_label_a: bool,
         predict_label_b: bool,
+        label_b_dim: int,
     ):
         super().__init__()
         self.input_proj = nn.Linear(in_dim, hidden_dim)
@@ -99,7 +100,7 @@ class ContactNet(nn.Module):
         self.dropout = nn.Dropout(p=0.0)
         self.contact_head = nn.Linear(hidden_dim * 2, 1) if predict_contact else None
         self.label_a_head = nn.Linear(hidden_dim * 2, 1) if predict_label_a else None
-        self.label_b_head = nn.Linear(hidden_dim * 2, 1) if predict_label_b else None
+        self.label_b_head = nn.Linear(hidden_dim * 2, label_b_dim) if predict_label_b else None
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         x = self.input_proj(x)
@@ -112,7 +113,7 @@ class ContactNet(nn.Module):
         if self.label_a_head is not None:
             result["label_a"] = self.label_a_head(feat).squeeze(-1)
         if self.label_b_head is not None:
-            result["label_b"] = self.label_b_head(feat).squeeze(-1)
+            result["label_b"] = self.label_b_head(feat)
         return result
 
 
@@ -140,6 +141,7 @@ class OnlinePredictor(Node):
 
         self.buffer = deque()
         self.pred_buffer = deque()
+        self.label_b_circular = False
 
         if self.needs_joint:
             self.create_subscription(JointState, args.topic_joint, self._on_joint, 10)
@@ -179,6 +181,12 @@ class OnlinePredictor(Node):
         feature_cols = ckpt["feature_columns"]
         seq_len = int(ckpt["seq_len"])
         predict_labels = _infer_predict_labels(state, ckpt)
+        label_b_dim = 0
+        if "label_b" in predict_labels:
+            label_b_dim = state.get("label_b_head.weight", torch.empty(0)).shape[0]
+            if label_b_dim == 0:
+                label_b_dim = 1
+        self.label_b_circular = (ckpt.get("label_b_encoding") == "sin_cos") or (label_b_dim == 2)
 
         in_dim = state["input_proj.weight"].shape[1]
         hidden_dim = state["input_proj.weight"].shape[0]
@@ -190,6 +198,7 @@ class OnlinePredictor(Node):
             predict_contact="contact" in predict_labels,
             predict_label_a="label_a" in predict_labels,
             predict_label_b="label_b" in predict_labels,
+            label_b_dim=label_b_dim,
         )
         model.load_state_dict(state)
         model.to(self.device)
@@ -399,7 +408,15 @@ class OnlinePredictor(Node):
         if "label_a" in logits:
             result["label_a"] = float(logits["label_a"].cpu().numpy().item())
         if "label_b" in logits:
-            result["label_b"] = float(logits["label_b"].cpu().numpy().item())
+            if self.label_b_circular or logits["label_b"].numel() > 1:
+                vec = logits["label_b"].cpu().numpy().reshape(-1)
+                angle = np.degrees(np.arctan2(vec[1], vec[0]))
+                if angle < 0:
+                    angle += 360.0
+                result["label_b"] = float(angle)
+                result["_label_b_vec"] = vec.astype(np.float32)
+            else:
+                result["label_b"] = float(logits["label_b"].cpu().numpy().item())
         return result
 
     def _update_pred_buffer(self, pred: Dict[str, float]) -> Dict[str, float]:
@@ -412,8 +429,20 @@ class OnlinePredictor(Node):
             return pred
 
         avg = {}
+        if self.label_b_circular:
+            vecs = [p["_label_b_vec"] for _, p in self.pred_buffer if "_label_b_vec" in p]
+            if vecs:
+                mean_vec = np.mean(np.stack(vecs), axis=0)
+                angle = np.degrees(np.arctan2(mean_vec[1], mean_vec[0]))
+                if angle < 0:
+                    angle += 360.0
+                avg["label_b"] = float(angle)
         keys = pred.keys()
         for key in keys:
+            if key.startswith("_"):
+                continue
+            if self.label_b_circular and key == "label_b":
+                continue
             vals = [p[key] for _, p in self.pred_buffer if key in p]
             if vals:
                 avg[key] = float(np.mean(vals))

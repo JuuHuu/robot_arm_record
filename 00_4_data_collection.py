@@ -36,8 +36,11 @@ TOPIC_WRENCH = "/force_torque_sensor_broadcaster/wrench"
 # Output base folder
 OUTPUT_BASE_DIR = "/home/juu/Documents/robot_arm_record/exported"
 
-# Optional: run a data preparation script before each collect phase
-PREP_SCRIPT_PATH = "/home/juu/Documents/robot_arm_record/00_3_execute.py"  # e.g. "/home/juu/Documents/robot_arm_record/00_3_execute.py"
+# Optional: run a zero-ftsensor service and calibration script before each collect phase
+ZERO_FT_SERVICE = "/io_and_status_controller/zero_ftsensor"
+CALIBRATION_SCRIPT_PATH = "/home/juu/Documents/robot_arm_record/09_01_calibration.py"
+CALIBRATION_RETRIES = 3
+CALIBRATION_RETRY_DELAY = 2.0
 
 # Optional: limit how many cycles to run (None = all pairs)
 MAX_CYCLES = None
@@ -122,13 +125,29 @@ def build_values(single, start, stop, step, label):
     return inclusive_range(int(start), int(stop), int(step))
 
 
-def run_prep_script():
-    if PREP_SCRIPT_PATH is None:
+def run_prep_sequence():
+    if ZERO_FT_SERVICE:
+        subprocess.run(
+            ["ros2", "service", "call", ZERO_FT_SERVICE, "std_srvs/srv/Trigger", "{}"],
+            check=True,
+        )
+    if CALIBRATION_SCRIPT_PATH is None:
         return
-    path = Path(PREP_SCRIPT_PATH)
+    path = Path(CALIBRATION_SCRIPT_PATH)
     if not path.exists():
-        raise FileNotFoundError(f"Prep script not found: {path}")
-    subprocess.run([sys.executable, str(path)], check=True)
+        raise FileNotFoundError(f"Calibration script not found: {path}")
+    attempts = max(1, int(CALIBRATION_RETRIES))
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            subprocess.run([sys.executable, str(path)], check=True)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            time.sleep(CALIBRATION_RETRY_DELAY)
+    raise last_exc
 
 
 def _stamp_to_float(stamp):
@@ -321,7 +340,6 @@ def main():
                 cycle_count += 1
                 print(f"\nCycle {cycle_count}/{total_cycles} (rep {rep + 1}/{REPEAT_PER_PAIR})")
                 hit(times=1)
-                collector.start_recording()
                 countdown(
                     "PREPARE",
                     PREP_SECONDS,
@@ -332,7 +350,8 @@ def main():
                     rep_total=rep_total,
                 )
 
-                run_prep_script()
+                run_prep_sequence()
+                collector.start_recording()
                 hit(times=2)
                 countdown(
                     "COLLECT",

@@ -18,13 +18,13 @@ from tf2_ros import Buffer, TransformListener
 
 
 # ================== CONFIG DEFAULTS ==================
-DEFAULT_SPEED = 0.05  # m/s
+DEFAULT_SPEED = 0.1  # m/s
+DEFAULT_ACCEL = 0.5  # m/s^2
 DEFAULT_AMP_XY = 0.05  # m
 DEFAULT_AMP_Z = 0.02  # m
 DEFAULT_LOOPS = 1
 DEFAULT_POINTS_PER_LOOP = 200
 DEFAULT_MIN_SEGMENT_TIME = 0.03  # s
-DEFAULT_JOINT_SPEED = 0.5  # rad/s
 DEFAULT_MAX_JOINT_JUMP = 1.5  # rad
 DEFAULT_WAIT_TIMEOUT = 10.0  # s
 DEFAULT_BASE_FRAME = "base"
@@ -70,6 +70,61 @@ def _generate_eight_points(
         z = amp_z * math.sin(2.0 * t)
         points.append(center + np.array([x, y, z], dtype=float))
     return points
+
+
+def _time_from_distance(s: float, total: float, v_max: float, accel: float) -> float:
+    if total <= 0.0:
+        return 0.0
+    if accel <= 0.0:
+        return s / max(v_max, 1e-6)
+
+    d_acc = (v_max * v_max) / (2.0 * accel)
+    if total < 2.0 * d_acc:
+        v_peak = math.sqrt(total * accel)
+        t_acc = v_peak / accel
+        half = total / 2.0
+        if s <= half:
+            return math.sqrt(2.0 * s / accel)
+        return 2.0 * t_acc - math.sqrt(2.0 * (total - s) / accel)
+
+    t_acc = v_max / accel
+    d_flat = total - 2.0 * d_acc
+    if s <= d_acc:
+        return math.sqrt(2.0 * s / accel)
+    if s <= d_acc + d_flat:
+        return t_acc + (s - d_acc) / v_max
+    remaining = total - s
+    return t_acc + d_flat / v_max + (t_acc - math.sqrt(2.0 * remaining / accel))
+
+
+def _compute_time_profile(
+    points: List[np.ndarray],
+    speed: float,
+    accel: float,
+    min_segment_time: float,
+) -> List[float]:
+    if len(points) < 2:
+        return [0.0]
+
+    distances = []
+    total = 0.0
+    prev = points[0]
+    for point in points[1:]:
+        dist = float(np.linalg.norm(point - prev))
+        distances.append(dist)
+        total += dist
+        prev = point
+
+    times = [0.0]
+    s = 0.0
+    last_t = 0.0
+    for dist in distances:
+        s += dist
+        t_target = _time_from_distance(s, total, speed, accel)
+        t_target = max(t_target, last_t + min_segment_time)
+        times.append(t_target)
+        last_t = t_target
+    return times
 
 
 class EightShapeCalibration(Node):
@@ -178,13 +233,6 @@ class EightShapeCalibration(Node):
         traj = JointTrajectory()
         traj.joint_names = JOINT_NAMES
 
-        start_pt = JointTrajectoryPoint()
-        start_pt.positions = list(start_q)
-        start_pt.velocities = [0.0] * len(JOINT_NAMES)
-        start_pt.time_from_start = _duration_to_msg(0.0)
-        traj.points.append(start_pt)
-
-        prev_point = points[0]
         prev_q = start_q
         t_from_start = 0.0
         q_list = []
@@ -201,29 +249,47 @@ class EightShapeCalibration(Node):
             q_list.append(q)
             prev_q = q
 
-        prev_point = points[0]
-        prev_q = start_q
-        for point, q in zip(points[1:], q_list):
-            dist = float(np.linalg.norm(point - prev_point))
-            dt = max(dist / self.args.speed, self.args.min_segment_time)
-            t_from_start += dt
+        times = _compute_time_profile(
+            points,
+            speed=self.args.speed,
+            accel=self.args.accel,
+            min_segment_time=self.args.min_segment_time,
+        )
+        q_points = [start_q] + q_list
+        for q, t_target in zip(q_points, times):
+            t_from_start = max(t_from_start, t_target)
             pt = JointTrajectoryPoint()
             pt.positions = list(q)
-            pt.velocities = [0.0] * len(JOINT_NAMES)
             pt.time_from_start = _duration_to_msg(t_from_start)
             traj.points.append(pt)
-            prev_point = point
-            prev_q = q
 
-        max_joint_delta = float(np.max(np.abs(prev_q - start_q)))
-        if max_joint_delta > 1e-5:
-            dt = max(max_joint_delta / self.args.joint_speed, self.args.min_segment_time)
-            t_from_start += dt
-            pt = JointTrajectoryPoint()
-            pt.positions = list(start_q)
-            pt.velocities = [0.0] * len(JOINT_NAMES)
-            pt.time_from_start = _duration_to_msg(t_from_start)
-            traj.points.append(pt)
+        vels = []
+        accs = []
+        for i in range(len(q_points)):
+            if i == 0:
+                v = np.zeros_like(q_points[0])
+            else:
+                dt = max(times[i] - times[i - 1], self.args.min_segment_time)
+                v = (q_points[i] - q_points[i - 1]) / dt
+            vels.append(v)
+
+        for i in range(len(q_points)):
+            if i == 0:
+                a = np.zeros_like(q_points[0])
+            else:
+                dt = max(times[i] - times[i - 1], self.args.min_segment_time)
+                a = (vels[i] - vels[i - 1]) / dt
+            accs.append(a)
+
+        for i, pt in enumerate(traj.points):
+            pt.velocities = list(vels[i])
+            pt.accelerations = list(accs[i])
+
+        if traj.points:
+            traj.points[0].velocities = [0.0] * len(JOINT_NAMES)
+            traj.points[0].accelerations = [0.0] * len(JOINT_NAMES)
+            traj.points[-1].velocities = [0.0] * len(JOINT_NAMES)
+            traj.points[-1].accelerations = [0.0] * len(JOINT_NAMES)
 
         return traj
 
@@ -264,13 +330,15 @@ class EightShapeCalibration(Node):
             self._publish_preview(traj, start_q)
             self.get_logger().info(
                 f"Preview only: computed {len(traj.points)} points; "
-                f"speed={self.args.speed:.3f} m/s, amp_xy={self.args.amp_xy:.3f} m, amp_z={self.args.amp_z:.3f} m."
+                f"speed={self.args.speed:.3f} m/s, accel={self.args.accel:.3f} m/s^2, "
+                f"amp_xy={self.args.amp_xy:.3f} m, amp_z={self.args.amp_z:.3f} m."
             )
             return
 
         self.get_logger().info(
             f"Sending {len(traj.points)} trajectory points "
-            f"(speed={self.args.speed:.3f} m/s, amp_xy={self.args.amp_xy:.3f} m, amp_z={self.args.amp_z:.3f} m)."
+            f"(speed={self.args.speed:.3f} m/s, accel={self.args.accel:.3f} m/s^2, "
+            f"amp_xy={self.args.amp_xy:.3f} m, amp_z={self.args.amp_z:.3f} m)."
         )
         self.traj_pub.publish(traj)
         total_time = float(traj.points[-1].time_from_start.sec) + (
@@ -282,6 +350,7 @@ class EightShapeCalibration(Node):
 def parse_args():
     parser = argparse.ArgumentParser(description="Run a 3D figure-eight calibration motion.")
     parser.add_argument("--speed", type=float, default=DEFAULT_SPEED, help="Cartesian speed (m/s).")
+    parser.add_argument("--accel", type=float, default=DEFAULT_ACCEL, help="Cartesian accel (m/s^2).")
     parser.add_argument("--amp-xy", type=float, default=DEFAULT_AMP_XY, help="Figure-eight XY amplitude (m).")
     parser.add_argument("--amp-z", type=float, default=DEFAULT_AMP_Z, help="Z amplitude (m).")
     parser.add_argument("--loops", type=int, default=DEFAULT_LOOPS, help="Number of figure-eight loops.")
@@ -292,7 +361,6 @@ def parse_args():
         default=DEFAULT_MIN_SEGMENT_TIME,
         help="Minimum time per segment (s).",
     )
-    parser.add_argument("--joint-speed", type=float, default=DEFAULT_JOINT_SPEED, help="Return-to-start joint speed (rad/s).")
     parser.add_argument("--max-joint-jump", type=float, default=DEFAULT_MAX_JOINT_JUMP, help="Max joint delta allowed (rad).")
     parser.add_argument("--wait-timeout", type=float, default=DEFAULT_WAIT_TIMEOUT, help="Timeout for joint/pose (s).")
     parser.add_argument("--base-frame", default=DEFAULT_BASE_FRAME, help="Base frame for TF and IK.")
@@ -318,8 +386,8 @@ def main():
     args = parse_args()
     if args.speed <= 0.0:
         raise ValueError("Speed must be > 0.")
-    if args.joint_speed <= 0.0:
-        raise ValueError("Joint speed must be > 0.")
+    if args.accel <= 0.0:
+        raise ValueError("Accel must be > 0.")
 
     rclpy.init()
     node = EightShapeCalibration(args)

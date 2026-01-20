@@ -1,5 +1,6 @@
 import argparse
 import glob
+import math
 import os
 from typing import Dict, List, Tuple
 
@@ -15,27 +16,27 @@ DEFAULT_PATTERN = "autosave_[0-9][0-9]_[0-9][0-9][0-9]"
 DEFAULT_JOINT_CSV = "fillted_joint_states.csv"
 DEFAULT_WRENCH_CSV = "filtered_wrench.csv"
 DEFAULT_SEGMENT_CSV = "selected_segments.csv"
-DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/auto_data/joints_only.pth"
+DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/weights/03_joints.pth"
 
 # input data
 DEFAULT_JOINT_VALUE_COLS = "position,velocity,effort_lp" #"position,velocity,effort_lp"
 DEFAULT_WRENCH_VALUE_COLS = "" #"fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp"
-DEFAULT_AUGMENT_CROPS = 5
+DEFAULT_AUGMENT_CROPS = 10
 DEFAULT_NORMALIZE_INPUT = True
-DEFAULT_TRAIN_WINDOW_SECONDS = 1.8
+DEFAULT_TRAIN_WINDOW_SECONDS = 1.0
 DEFAULT_SEQ_LEN = 50
 
 # network
 DEFAULT_BATCH_SIZE = 64
-DEFAULT_EPOCHS = 1000
+DEFAULT_EPOCHS = 5000
 DEFAULT_LR = 1e-4
-DEFAULT_WEIGHT_DECAY = 1e-4
+DEFAULT_WEIGHT_DECAY = 1e-4 
 DEFAULT_HIDDEN_DIM = 128
 DEFAULT_NUM_LAYERS = 3
 DEFAULT_DROPOUT = 0.2
 DEFAULT_VAL_RATIO = 0.2
-DEFAULT_PATIENCE = 100
-DEFAULT_IMPROVE_DELTA = 1e-4
+DEFAULT_PATIENCE = 500
+DEFAULT_IMPROVE_DELTA = 1e-5
 DEFAULT_LOG_EVERY = 10
 
 # output results
@@ -80,6 +81,23 @@ def _parse_labels(value: str) -> List[str]:
     if not labels:
         raise ValueError("No labels selected. Use --predict-labels contact,label_a,label_b or subset.")
     return labels
+
+
+def encode_angle_deg(angle_deg: np.ndarray) -> np.ndarray:
+    angles = np.mod(angle_deg, 360.0)
+    radians = np.deg2rad(angles)
+    vec = np.stack([np.cos(radians), np.sin(radians)], axis=-1).astype(np.float32)
+    invalid = angle_deg < 0
+    if np.any(invalid):
+        vec[invalid] = np.nan
+    return vec
+
+
+def circular_mae_deg(pred_vec: torch.Tensor, true_vec: torch.Tensor) -> torch.Tensor:
+    pred_angle = torch.atan2(pred_vec[:, 1], pred_vec[:, 0])
+    true_angle = torch.atan2(true_vec[:, 1], true_vec[:, 0])
+    delta = torch.atan2(torch.sin(pred_angle - true_angle), torch.cos(pred_angle - true_angle))
+    return torch.abs(delta) * (180.0 / math.pi)
 
 
 def load_joint_wide(joint_csv: str, joint_cols: List[str]) -> pd.DataFrame:
@@ -315,7 +333,7 @@ class ContactNet(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         self.contact_head = nn.Linear(hidden_dim * 2, 1) if predict_contact else None
         self.label_a_head = nn.Linear(hidden_dim * 2, 1) if predict_label_a else None
-        self.label_b_head = nn.Linear(hidden_dim * 2, 1) if predict_label_b else None
+        self.label_b_head = nn.Linear(hidden_dim * 2, 2) if predict_label_b else None
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         x = self.input_proj(x)
@@ -328,7 +346,7 @@ class ContactNet(nn.Module):
         if self.label_a_head is not None:
             result["label_a"] = self.label_a_head(feat).squeeze(-1)
         if self.label_b_head is not None:
-            result["label_b"] = self.label_b_head(feat).squeeze(-1)
+            result["label_b"] = self.label_b_head(feat)
         return result
 
 
@@ -349,7 +367,7 @@ def train(args: argparse.Namespace) -> None:
     )
 
     y_a = y_a_raw.astype(np.float32)
-    y_b = y_b_raw.astype(np.float32)
+    y_b = encode_angle_deg(y_b_raw.astype(np.float32))
 
     idx = np.arange(len(X))
     np.random.shuffle(idx)
@@ -445,7 +463,7 @@ def train(args: argparse.Namespace) -> None:
                     loss_a = label_a_loss_fn(logits["label_a"][mask_a], y_a_b[mask_a])
                     loss = loss + args.label_a_weight * loss_a
             if "label_b" in logits:
-                mask_b = (y_contact_b > 0.5) & (y_b_b != -1)
+                mask_b = (y_contact_b > 0.5) & (~torch.isnan(y_b_b).any(dim=1))
                 if mask_b.any():
                     loss_b = label_b_loss_fn(logits["label_b"][mask_b], y_b_b[mask_b])
                     loss = loss + args.label_b_weight * loss_b
@@ -472,10 +490,10 @@ def train(args: argparse.Namespace) -> None:
                         count_a += mask_a.sum().item()
 
                 if "label_b" in logits:
-                    mask_b = (y_contact_b > 0.5) & (y_b_b != -1)
+                    mask_b = (y_contact_b > 0.5) & (~torch.isnan(y_b_b).any(dim=1))
                     if mask_b.any():
                         pred_b = logits["label_b"]
-                        metrics["label_b_mae"] += torch.abs(pred_b[mask_b] - y_b_b[mask_b]).sum().item()
+                        metrics["label_b_mae"] += circular_mae_deg(pred_b[mask_b], y_b_b[mask_b]).sum().item()
                         count_b += mask_b.sum().item()
 
         metrics["contact_acc"] = metrics["contact_acc"] / max(total, 1) if predict_contact else 0.0
@@ -533,6 +551,9 @@ def train(args: argparse.Namespace) -> None:
             "label_b_map": None,
             "label_a_regression": True,
             "label_b_regression": True,
+            "label_b_encoding": "sin_cos",
+            "label_b_units": "deg",
+            "label_b_range": 360.0,
             "predict_labels": predict_labels,
             "feat_mean": feat_mean,
             "feat_std": feat_std,

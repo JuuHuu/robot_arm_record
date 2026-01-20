@@ -7,3 +7,4 @@ Best val | loss 0.1731 | acc/mae 1.000/0.221/1.090
 
 
 03_joints.pth, only joints information, with new curcular label b
+

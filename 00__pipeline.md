@@ -46,4 +46,12 @@ Using GRN to train the data
 Verify the network using online data
 ```
 /home/juu/Documents/robot_arm_record/06_01_online_predict.py
+
+```
+
+## Calibration the pose
+calibrate the joint effort due to static friction
+```
+/home/juu/Documents/robot_arm_record/09_01_calibration.py
+
 ```

@@ -8,7 +8,7 @@ from scipy.signal import butter, filtfilt, detrend
 
 # ========= CONFIG =========
 # Batch processing (set INPUT_DIR to batch process all matching files)
-INPUT_DIR = "/home/juu/Documents/robot_arm_record/auto_data"
+INPUT_DIR = "/home/juu/Documents/robot_arm_record/auto_data" 
 INPUT_GLOB = "*/wrench.csv"
 OUTPUT_FILENAME = "filtered_wrench.csv"
 

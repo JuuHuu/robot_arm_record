@@ -20,7 +20,7 @@ DEFAULT_MODEL_OUT = "/home/juu/Documents/robot_arm_record/weights/03_joints.pth"
 
 # input data
 DEFAULT_JOINT_VALUE_COLS = "position,velocity,effort_lp" #"position,velocity,effort_lp"
-DEFAULT_WRENCH_VALUE_COLS = "" #"fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp"
+DEFAULT_WRENCH_VALUE_COLS = "" #"fx_lp,fy_lp,fz_lp,tx_lp,ty_lp,tz_lp" 
 DEFAULT_AUGMENT_CROPS = 10
 DEFAULT_NORMALIZE_INPUT = True
 DEFAULT_TRAIN_WINDOW_SECONDS = 1.0

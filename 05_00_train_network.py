@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 # ========= CONFIG =========
 CSV_PATH = "/home/juu/Documents/robot_arm_record/exported/move_with_hammer/ml_segments_0.1.csv"
-MODEL_OUT = "/home/juu/Documents/robot_arm_record/exported/move_with_hammer/posvel_to_effort_model.pth"
+MODEL_OUT = "/home/juu/Documents/robot_arm_record/exported/move_with_hammer/posvel_to_effort_model.pth" 
 
 TEST_SIZE = 0.3
 BATCH_SIZE = 128

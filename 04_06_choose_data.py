@@ -7,7 +7,7 @@ from matplotlib.widgets import SpanSelector, TextBox, Button
 
 
 # ========= CONFIG =========
-DEFAULT_FOLDER = "/home/juu/Documents/robot_arm_record/auto_data/autosave_16_300"
+DEFAULT_FOLDER = "/home/juu/Documents/robot_arm_record/auto_data/autosave_04_180" 
 JOINT_CSV_NAME = "fillted_joint_states.csv"
 WRENCH_CSV_NAME = "filtered_wrench.csv"
 

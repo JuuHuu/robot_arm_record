@@ -14,7 +14,7 @@ from sensor_msgs.msg import JointState
 
 
 # ========= CONFIG =========
-DEFAULT_MODEL_PATH = "/home/juu/Documents/robot_arm_record/weights/01_wrench_joint.pth"
+DEFAULT_MODEL_PATH = "/home/juu/Documents/robot_arm_record/weights/01_wrench_joint.pth" 
 DEFAULT_TOPIC_JOINT = "/joint_states_filtered"
 DEFAULT_TOPIC_WRENCH = "/wrench_filtered"
 DEFAULT_SYNC_TOL = 0.2  # seconds

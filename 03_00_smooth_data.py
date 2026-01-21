@@ -13,7 +13,7 @@ INPUT_GLOB = "*/joint_states.csv"
 OUTPUT_FILENAME = "fillted_joint_states.csv"
 
 # Single-file fallback (used only if INPUT_DIR is None)
-CSV_PATH = "/home/juu/Documents/robot_arm_record/exported/apply_force_04_00/joint_states.csv"
+CSV_PATH = "/home/juu/Documents/robot_arm_record/exported/apply_force_04_00/joint_states.csv" 
 OUTPUT_PATH = "/home/juu/Documents/robot_arm_record/exported/apply_force_04_00/fillted_joint_states.csv"
 
 
